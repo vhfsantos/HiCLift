@@ -4,6 +4,20 @@ from HiCLift.io import open_pairs, _pixel_to_reads, _pairs_write
 
 log = logging.getLogger(__name__)
 
+def convert_resolution_to_human_readable(number):
+    """
+    Simple function to convert the resolution to a human readable
+    format. It's used to write the name of the output file.
+    
+    vhfsantos, 2024-03-27
+    """
+    suffixes = ['bp', 'kb', 'Mb', 'Gb', 'Tb']
+    i = 0
+    while number >= 1000 and i < len(suffixes)-1:
+        number /= 1000.0
+        i += 1
+    return f"{number:.0f}{suffixes[i]}"
+
 def get_chrom_order(chroms_file):
     """
     Produce an "enumeration" of chromosomes based on the list
@@ -111,7 +125,8 @@ def make_mapping_table(chroms_path, lo, resolution=200):
     return D
 
 def liftover(in_path, out_pre, in_format, out_format, in_chroms, out_chroms, in_assembly, out_assembly,
-    chain_file, resolution=500, nproc_in=8, nproc_out=8, tmpdir='/tmp', memory='4G', high_res=False):
+    chain_file, resolution=500, nproc_in=8, nproc_out=8, tmpdir='/tmp', memory='4G', 
+    resolutions='2500000,1000000,500000,250000,100000,50000,25000,10000,5000'):
     
     tmpdir = os.path.abspath(os.path.expanduser(tmpdir))
     if not os.path.exists(tmpdir):
@@ -212,44 +227,32 @@ def liftover(in_path, out_pre, in_format, out_format, in_chroms, out_chroms, in_
         command = ['pairix', out_path]
         subprocess.check_call(' '.join(command), shell=True)
         if out_format == 'cool':
-            if high_res:
-                outcool = os.path.join(tmpdir, '{0}.{1}.cool'.format(out_pre, '1kb'))
-                bin_label = ':'.join([out_chroms, str(1000)])
-                log.info('Generate contact matrix using cooler at 2500000,1000000,500000,250000,100000,50000,25000,10000,5000,2000,1000 ...')
-                command = ['cooler', 'cload', 'pairix', '--assembly', out_assembly, '--nproc', str(nproc_out),
-                           '--max-split 12', bin_label, out_path, outcool]
-                subprocess.check_call(' '.join(command), shell=True)
-                outmcool = os.path.join(outfolder, '{0}.mcool'.format(out_pre))
-                command = ['cooler', 'zoomify', '-p', str(nproc_out), '-r 1000,2000,5000,10000,25000,50000,100000,250000,500000,1000000,2500000',
-                           '--balance', '-o', outmcool, outcool]
-                subprocess.check_call(' '.join(command), shell=True)
-            else:
-                outcool = os.path.join(tmpdir, '{0}.{1}.cool'.format(out_pre, '5kb'))
-                bin_label = ':'.join([out_chroms, str(5000)])
-                log.info('Generate contact matrix using cooler at 2500000,1000000,500000,250000,100000,50000,25000,10000,5000 ...')
-                command = ['cooler', 'cload', 'pairix', '--assembly', out_assembly, '--nproc', str(nproc_out),
-                           '--max-split 12', bin_label, out_path, outcool]
-                subprocess.check_call(' '.join(command), shell=True)
-                outmcool = os.path.join(outfolder, '{0}.mcool'.format(out_pre))
-                command = ['cooler', 'zoomify', '-p', str(nproc_out), '-r 5000,10000,25000,50000,100000,250000,500000,1000000,2500000',
-                           '--balance', '-o', outmcool, outcool]
-                subprocess.check_call(' '.join(command), shell=True)
+            # Get the human-friendly format of the highest resolution =====================
+            res = list(map(int, resolutions.split(',')))
+            highest_res = min(res)
+            highest_res_readable = convert_resolution_to_human_readable(highest_res)
+            # =============================================================================
+            outcool = os.path.join(tmpdir, '{0}.{1}.cool'.format(out_pre, highest_res_readable))
+            bin_label = ':'.join([out_chroms, str(1000)])
+            log.info(f'Generate contact matrix using cooler at {resolutions} ...')
+            command = ['cooler', 'cload', 'pairix', '--assembly', out_assembly, '--nproc', str(nproc_out),
+                       '--max-split 12', bin_label, out_path, outcool]
+            subprocess.check_call(' '.join(command), shell=True)
+            outmcool = os.path.join(outfolder, '{0}.mcool'.format(out_pre))
+            command = ['cooler', 'zoomify', '-p', str(nproc_out), f'-r {resolutions}',
+                       '--balance', '-o', outmcool, outcool]
+            subprocess.check_call(' '.join(command), shell=True)
             
             os.remove(outcool)
         else:
             data_folder = os.path.join(os.path.split(HiCLift.__file__)[0], 'data')
             juicer_folder = os.path.join(data_folder, 'juicer_tools_1.11.09_jcuda.0.8.jar')
             outhic = os.path.join(outfolder, '{0}.hic'.format(out_pre))
-            if high_res:
-                command = ['java', '-Xmx'+memory.lower(), '-jar', juicer_folder, 'pre',
-                            '-r 2500000,1000000,500000,250000,100000,50000,25000,10000,5000,2000,1000',
-                            out_path, outhic, out_chroms]
-                log.info('Generate contact matrices using juicer at 2500000,1000000,500000,250000,100000,50000,25000,10000,5000,2000,1000 ...')
-            else:
-                command = ['java', '-Xmx'+memory.lower(), '-jar', juicer_folder, 'pre',
-                            '-r 2500000,1000000,500000,250000,100000,50000,25000,10000,5000',
-                            out_path, outhic, out_chroms]
-                log.info('Generate contact matrices using juicer at 2500000,1000000,500000,250000,100000,50000,25000,10000,5000 ...')
+            # =============================================================================
+            command = ['java', '-Xmx'+memory.lower(), '-jar', juicer_folder, 'pre',
+                        f'-r {resolutions}',
+                        out_path, outhic, out_chroms]
+            log.info(f'Generate contact matrices using juicer at {resolutions}...')
             subprocess.check_call(' '.join(command), shell=True)
 
         os.remove(out_path)
